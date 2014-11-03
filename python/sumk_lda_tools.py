@@ -1,4 +1,3 @@
-
 ################################################################################
 #
 # TRIQS: a Toolbox for Research in Interacting Quantum Systems
@@ -703,13 +702,14 @@ class SumkLDATools(SumkLDA):
 
 
 
-    def transport_distribution(self, wiencase, mshape=None, broadening=0.01, energywindow=None, q_mesh = [0.0], beta = 50):
+    def transport_distribution(self, wiencase, mshape=None, broadening=0.01, energywindow=None, q_mesh = [0.0], beta = 50, LDA_only = False):
         """calculate Tr A(k,w) v(k) A(k, w+q) v(k) and optics.
         energywindow: regime for omega integral
         q_mesh: contains the frequencies of the optic conductivitity. q_mesh is repinned to the self-energy mesh
         (hence exact values might be different from those given in q_mesh)
         mshape: 3x3 matrix which defines the indices of directions. xx,yy,zz,xy,yz,zx. 
         (mshape[0,0]=1 --> xx,  mshape[1,1]=1 --> yy, mshape[1,2]=1 --> xx, default: xx)
+        LDA_only: Use Sigma = 0 (Issue to solve: code still needs self-energy for mesh) 
         """
         
         if mshape == None :
@@ -770,14 +770,14 @@ class SumkLDATools(SumkLDA):
                     mlist.append((ir, ic))
         
         ik = 0
-    
+        
         bln = self.block_names[self.SO]
         ntoi = self.names_to_ind[self.SO]
-
+        
         S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), mesh=self.Sigma_imp[0].mesh)) for isp in range(self.Nspinblocs) ], make_copies=False)
         mupat = [numpy.identity(self.n_orbitals[ik][isp], numpy.complex_) * self.chemical_potential for isp in range(self.Nspinblocs)] # construct mupat
         Annkw = [numpy.zeros((self.n_orbitals[ik][isp], self.n_orbitals[ik][isp], N_om), dtype=numpy.complex_) for isp in range(self.Nspinblocs)]
-    
+        
         ikarray = numpy.array(range(self.n_k))
         for ik in mpi.slice_array(ikarray):
             unchangesize = all([ self.n_orbitals[ik][isp] == mupat[isp].shape[0] for isp in range(self.Nspinblocs)])
@@ -791,25 +791,27 @@ class SumkLDATools(SumkLDA):
                # get lattice green function
             
             S <<= 1*Omega + 1j*broadening
-    
+            
             Ms = copy.deepcopy(mupat)
             for ibl in range(self.Nspinblocs):
                 ind = ntoi[bln[ibl]]
                 n_orb = self.n_orbitals[ik][ibl]
                 Ms[ibl] = self.hopping[ik,ind,0:n_orb,0:n_orb].real - mupat[ibl]
             S -= Ms
-    
-            tmp = S.copy()    # init temporary storage
-            ## substract self energy
-            for icrsh in xrange(self.n_corr_shells):
-                for sig, gf in tmp: tmp[sig] <<= self.upfold(ik, icrsh, sig, stmp[icrsh][sig], gf)
-                S -= tmp
-    
+            
+           # print S[self.block_names[self.SO][0]].data
+            if (LDA_only == False):
+                tmp = S.copy()    # init temporary storage
+                ## substract self energy
+                for icrsh in xrange(self.n_corr_shells):
+                    for sig, gf in tmp: tmp[sig] <<= self.upfold(ik, icrsh, sig, stmp[icrsh][sig], gf)
+                    S -= tmp
+
             S.invert()
-    
+
             for isp in range(self.Nspinblocs):
                 Annkw[isp].real = -copy.deepcopy(S[self.block_names[self.SO][isp]].data.swapaxes(0,1).swapaxes(1,2)).imag / numpy.pi
-    
+
             for isp in range(self.Nspinblocs):
                 if(ik%100==0):
                   print "ik,isp", ik, isp
@@ -823,7 +825,7 @@ class SumkLDATools(SumkLDA):
                 Aend = bmax - self.bandwin[isp][ik, 0] + 1
                 vstart = bmin - self.bandwin_opt[isp][ik, 0]
                 vend = bmax - self.bandwin_opt[isp][ik, 0] + 1
-        
+
                 #symmetry loop
                 for Rmat in self.symmcartesian:
                     # get new velocity.
@@ -834,13 +836,13 @@ class SumkLDATools(SumkLDA):
                     ipw = 0
                     for (ir, ic) in mlist:
                         for iw in xrange(N_om):
-    
-                    #        if(M[iw].real > 5.0 / beta):
-                    #            continue
+                            
+                     #       if(M[iw].real > 5.0 / beta):
+                     #           continue
                             for iq in range(len(q_mesh_ex)):
                                 #if(Qmesh_ex[iq]==0 or iw+Qmesh_ex[iq]>=N_om ):
                                 # here use fermi distribution to truncate self energy mesh.
-                               # if(q_mesh_ex[iq] == 0 or iw + q_mesh_ex[iq] >= N_om or M[iw].real + q_mesh[iq] < -10.0 / beta or M[iw].real >10.0 / beta):
+                                # if(q_mesh_ex[iq] == 0 or iw + q_mesh_ex[iq] >= N_om or M[iw].real + q_mesh[iq] < -10.0 / beta or M[iw].real >10.0 / beta):
                     #            if(iw + q_mesh_ex[iq] >= N_om or M[iw].real + q_mesh[iq] < -10.0 / beta or M[iw].real >10.0 / beta):
                     #                continue
                                 if(iw + q_mesh_ex[iq] >= N_om):
@@ -855,16 +857,16 @@ class SumkLDATools(SumkLDA):
                                     # print Annkwl.shape, Annkwr.shape, Rkveltr.shape, Rkveltc.shape
                                     Pwtem[ipw, iq, iw] += numpy.dot(numpy.dot(numpy.dot(Rkveltr, Annkwl), Rkveltc), Annkwr).trace().real
                         ipw += 1
-    
+                        
                 # k sum and spin sum.
                 self.Pw_optic += Pwtem * self.bz_weights[ik] / self.nsymm
-    
+
         self.Pw_optic = mpi.all_reduce(mpi.world, self.Pw_optic, lambda x, y : x + y)
         self.Pw_optic *= (2 - self.SP)
-    
+
         # just back up TD_optic data
         if mpi.is_master_node():
-            with open("TD_Optic_DMFT.dat", "w") as pwout:
+            with open("TD_Optic_DMFT_new.dat", "w") as pwout:
                 #shape
                 L1,L2,L3=self.Pw_optic.shape
                 pwout.write("%s  %s  %s\n"%(L1,L2,L3))
@@ -881,11 +883,20 @@ class SumkLDATools(SumkLDA):
                 for i in xrange(L1):
                     for iq in xrange(L2):
                         for iw in xrange(L3):
-                            pwout.write(str(self.Pw_optic[i, iq, iw]) + "    ")
+                            pwout.write(str(self.Pw_optic[i, iq, iw]) + "  ")
                 pwout.write("\n")
+
+              #  for i in xrange(L1):
+              #      for iq in xrange(L2):
+              #          for iw in xrange(L3):
+              #              pwout.write(str(i)+"   "+str(q_mesh_ex[iq] * deltaM) + "   " + str(M[iw]) + "   ")
+              #              pwout.write(str(self.Pw_optic[i, iq, iw]) + "    ")
+              #              pwout.write("\n")
+              #          pwout.write("\n")
+
         
     # loadOpticTD is probably not needed
-    def loadOpticTD(self,OpticTDFile="TD_Optic_DMFT.dat", beta=50):
+    def loadOpticTD(self,OpticTDFile="TD_Optic_DMFT_new.dat", beta=50):
         """ load optic conductivity distribution and calculate Optical Conductivty
         """
         if mpi.is_master_node():
@@ -897,7 +908,7 @@ class SumkLDATools(SumkLDA):
         
 
 
-    def conductivity_and_seebeck(self, OpticTDFile="TD_Optic_DMFT.dat",  beta=50, save=True):
+    def conductivity_and_seebeck(self, OpticTDFile="TD_Optic_DMFT_new.dat",  beta=50, save=True):
         """ #return 1/T*A0, that is Conductivity in unit 1/V
         calculate, save and return Conductivity
         """
@@ -909,14 +920,17 @@ class SumkLDATools(SumkLDA):
                Pw_optic=numpy.array([float(i) for i in pw.readline().split()]).reshape(L1,L2,L3)
 
            omegaT = M * beta
-           A0 = numpy.zeros((L1,L2), dtype=numpy.float)
+           A0 = numpy.empty((L1,L2), dtype=numpy.float)
+           q_0 = False
+           Seebeck = numpy.zeros((L1, 1), dtype=numpy.float)
+
            deltaM = M[1]-M[0]
            for iq in xrange(L2):
                # treat q = 0,  caclulate conductivity and seebeck
                if (q_meshr[iq] == 0.0):
                    # if q_meshr contains multiple entries with w=0, A1 is overwritten!
+                   q_0 = True
                    A1 = numpy.zeros((L1, 1), dtype=numpy.float)
-                   Seebeck = numpy.zeros((L1, 1), dtype=numpy.float)
                    for im in xrange(L1):
                        for iw in xrange(L3):
                            A0[im, iq] += beta * Pw_optic[im, iq, iw] * self.fermidis(omegaT[iw]) * self.fermidis(-omegaT[iw])
@@ -942,7 +956,8 @@ class SumkLDATools(SumkLDA):
                for iq in xrange(L2):
                    print "Conductivity in direction %d for q_mesh %d       %.4f  x 10^4 Ohm^-1 cm^-1" % (im, iq, OpticCon[im, iq])
                    print "Resistivity in dircection %d for q_mesh %d       %.4f  x 10^-4 Ohm cm" % (im, iq, 1.0 / OpticCon[im, iq])
-               print "Seebeck in direction %d  for q = 0              %.4f  x 10^(-6) V/K" % (im, Seebeck[im])
+               if q_0:
+                   print "Seebeck in direction %d  for q = 0              %.4f  x 10^(-6) V/K" % (im, Seebeck[im])
 
            # Store data
            if save == True:

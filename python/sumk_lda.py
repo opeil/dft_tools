@@ -38,7 +38,7 @@ class SumkLDA:
 
 
     def __init__(self, hdf_file, mu = 0.0, h_field = 0.0, use_lda_blocks = False, lda_data = 'SumK_LDA', symm_corr_data = 'SymmCorr',
-                 par_proj_data = 'SumK_LDA_ParProj', symm_par_data = 'SymmPar', bands_data = 'SumK_LDA_Bands'):
+                 par_proj_data = 'SumK_LDA_ParProj', symm_par_data = 'SymmPar', bands_data = 'SumK_LDA_Bands', transp_data = 'Transp'):
         """
         Initialises the class from data previously stored into an HDF5
         """
@@ -52,6 +52,7 @@ class SumkLDA:
             self.bands_data = bands_data
             self.symm_par_data = symm_par_data
             self.symm_corr_data = symm_corr_data
+            self.transp_data = transp_data
             self.block_names = [ ['up','down'], ['ud'] ]
             self.n_spin_blocks_gf = [2,1]
             self.Gupf = None

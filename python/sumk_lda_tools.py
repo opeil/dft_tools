@@ -45,7 +45,7 @@ class SumkLDATools(SumkLDA):
 
 
     def __init__(self, hdf_file, mu = 0.0, h_field = 0.0, use_lda_blocks = False, lda_data = 'SumK_LDA', symm_corr_data = 'SymmCorr',
-                 par_proj_data = 'SumK_LDA_ParProj', symm_par_data = 'SymmPar', bands_data = 'SumK_LDA_Bands'):
+                 par_proj_data = 'SumK_LDA_ParProj', symm_par_data = 'SymmPar', bands_data = 'SumK_LDA_Bands', transp_data = 'Transp'):
 
         self.Gupf_refreq = None
         SumkLDA.__init__(self,hdf_file=hdf_file,mu=mu,h_field=h_field,use_lda_blocks=use_lda_blocks,lda_data=lda_data,
@@ -667,3 +667,295 @@ class SumkLDATools(SumkLDA):
                      for isp in range(len(bln)) ]
 
         return dens_mat
+
+
+    def read_transport_input_from_hdf(self):
+        """
+        Reads the data for transport calculations from the HDF file
+        """
+
+        thingstoread = ['bandwin','bandwin_opt','kp','latticeangles','latticeconstants','latticetype','nsymm','symmcartesian','vk']
+        retval = self.read_input_from_hdf(subgrp=self.transp_data,things_to_read = thingstoread)
+        return retval
+    
+    
+    def cellvolume(self, latticetype, latticeconstants, latticeangle):
+        """
+        Calculate cell volume: volumecc conventional cell, volumepc, primitive cell.
+        """
+        a = latticeconstants[0]
+        b = latticeconstants[1]
+        c = latticeconstants[2]
+        c_al = numpy.cos(latticeangle[0])
+        c_be = numpy.cos(latticeangle[1])
+        c_ga = numpy.cos(latticeangle[2])
+        volumecc = a * b * c * numpy.sqrt(1 + 2 * c_al * c_be * c_ga - c_al ** 2 - c_be * 82 - c_ga ** 2)
+      
+        det = {"P":1, "F":4, "B":2, "R":3, "H":1, "CXY":2, "CYZ":2, "CXZ":2}
+        volumepc = volumecc / det[latticetype]
+      
+        return volumecc, volumepc
+
+
+    def fermidis(self, x):
+        return 1.0/(numpy.exp(x)+1)
+
+
+
+
+    def transport_distribution(self, wiencase, mshape=None, broadening=0.01, energywindow=None, q_mesh = [0.0], beta = 50):
+        """calculate Tr A(k,w) v(k) A(k, w+q) v(k) and optics.
+        energywindow: regime for omega integral
+        q_mesh: contains the frequencies of the optic conductivitity. q_mesh is repinned to the self-energy mesh
+        (hence exact values might be different from those given in q_mesh)
+        mshape: 3x3 matrix which defines the indices of directions. xx,yy,zz,xy,yz,zx. 
+        (mshape[0,0]=1 --> xx,  mshape[1,1]=1 --> yy, mshape[1,2]=1 --> xx, default: xx)
+        """
+        
+        if mshape == None :
+             mshape = numpy.zeros(3)
+             mshape[0,0] = 1
+        assert mshape.shape == (3, 3), "mshape has to be a 3x3 matrix"
+        # assert ((self.SP == 0) and (self.SO == 0)), "For SP and SO implementation of spaghettis has to be changed!"
+    
+        # Read data from h5
+        self.read_transport_input_from_hdf()
+        velocities = self.vk
+
+        # This shouldn't be necessary
+        self.Nspinblocs = self.SP + 1 - self.SO
+        
+        volcc, volpc  = self.cellvolume(self.latticetype, self.latticeconstants, self.latticeangles)
+        self.vol = volpc
+
+        # calculate A(k,w)
+        #######################################
+    
+        if mpi.is_master_node() :
+            print "chemical potential: ", self.chemical_potential
+        #we need this somehow for k_dep_projections. So we have to face the problem that the size of A(k,\omega) will
+        #change, and more, the band index for the A(k,\omega) matrix is not known yet.
+    
+        # use k-dependent-projections.
+        assert self.k_dep_projection == 1, "Not implemented!"
+    
+        # form self energy from impurity self energy and double counting term.
+        stmp = self.add_dc()
+    
+        #set mesh and energyrange.
+        M = [x for x in self.Sigma_imp[0].mesh]
+        deltaM = numpy.abs(M[0] - M[1])
+        N_om = len(M)
+        if energywindow is None:
+            omminplot = M[0].real - 0.001
+            ommaxplot = M[N_om - 1].real + 0.001
+        else:
+            omminplot = energywindow[0]
+            ommaxplot = energywindow[1]
+    
+        # define exact mesh for optic conductivity
+        q_mesh_ex = [int(x / deltaM) for x in q_mesh]
+        if mpi.is_master_node():
+            print "q_mesh   ", q_mesh
+            print "mesh interval in self energy  ", deltaM
+            print "q_mesh / mesh interval  ", q_mesh_ex
+    
+        # output P(\omega)_xy should has the same dimension as defined in mshape.
+        self.Pw_optic = numpy.zeros((mshape.sum(), len(q_mesh), N_om), dtype=numpy.float_)
+    
+        mlist = []
+        for ir in xrange(3):
+            for ic in xrange(3):
+                if(mshape[ir][ic] == 1):
+                    mlist.append((ir, ic))
+        
+        ik = 0
+    
+        bln = self.block_names[self.SO]
+        ntoi = self.names_to_ind[self.SO]
+
+        S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), mesh=self.Sigma_imp[0].mesh)) for isp in range(self.Nspinblocs) ], make_copies=False)
+        mupat = [numpy.identity(self.n_orbitals[ik][isp], numpy.complex_) * self.chemical_potential for isp in range(self.Nspinblocs)] # construct mupat
+        Annkw = [numpy.zeros((self.n_orbitals[ik][isp], self.n_orbitals[ik][isp], N_om), dtype=numpy.complex_) for isp in range(self.Nspinblocs)]
+    
+        ikarray = numpy.array(range(self.n_k))
+        for ik in mpi.slice_array(ikarray):
+            unchangesize = all([ self.n_orbitals[ik][isp] == mupat[isp].shape[0] for isp in range(self.Nspinblocs)])
+            if (not unchangesize):
+               # recontruct green functions.
+               S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), mesh=self.Sigma_imp[0].mesh)) for isp in range(self.Nspinblocs) ], make_copies=False)
+               # construct mupat
+               mupat = [numpy.identity(self.n_orbitals[ik][isp], numpy.complex_) * self.chemical_potential for isp in range(self.Nspinblocs)]
+               #set a temporary array storing spectral functions with band index. Note, usually we should have spin index
+               Annkw = [numpy.zeros((self.n_orbitals[ik][isp], self.n_orbitals[ik][isp], N_om), dtype=numpy.complex_) for isp in range(self.Nspinblocs)]
+               # get lattice green function
+            
+            S <<= 1*Omega + 1j*broadening
+    
+            Ms = copy.deepcopy(mupat)
+            for ibl in range(self.Nspinblocs):
+                ind = ntoi[bln[ibl]]
+                n_orb = self.n_orbitals[ik][ibl]
+                Ms[ibl] = self.hopping[ik,ind,0:n_orb,0:n_orb].real - mupat[ibl]
+            S -= Ms
+    
+            tmp = S.copy()    # init temporary storage
+            ## substract self energy
+            for icrsh in xrange(self.n_corr_shells):
+                for sig, gf in tmp: tmp[sig] <<= self.upfold(ik, icrsh, sig, stmp[icrsh][sig], gf)
+                S -= tmp
+    
+            S.invert()
+    
+            for isp in range(self.Nspinblocs):
+                Annkw[isp].real = -copy.deepcopy(S[self.block_names[self.SO][isp]].data.swapaxes(0,1).swapaxes(1,2)).imag / numpy.pi
+    
+            for isp in range(self.Nspinblocs):
+                if(ik%100==0):
+                  print "ik,isp", ik, isp
+               # kvel = velocities[isp].vks[ik]
+                kvel = velocities[isp][ik]
+                Pwtem = numpy.zeros((mshape.sum(), len(q_mesh_ex), N_om), dtype=numpy.float_)
+                
+                bmin = max(self.bandwin[isp][ik, 0], self.bandwin_opt[isp][ik, 0])
+                bmax = min(self.bandwin[isp][ik, 1], self.bandwin_opt[isp][ik, 1])
+                Astart = bmin - self.bandwin[isp][ik, 0]
+                Aend = bmax - self.bandwin[isp][ik, 0] + 1
+                vstart = bmin - self.bandwin_opt[isp][ik, 0]
+                vend = bmax - self.bandwin_opt[isp][ik, 0] + 1
+        
+                #symmetry loop
+                for Rmat in self.symmcartesian:
+                    # get new velocity.
+                    Rkvel = copy.deepcopy(kvel)
+                    for vnb1 in xrange(self.bandwin_opt[isp][ik, 1] - self.bandwin_opt[isp][ik, 0] + 1):
+                        for vnb2 in xrange(self.bandwin_opt[isp][ik, 1] - self.bandwin_opt[isp][ik, 0] + 1):
+                            Rkvel[vnb1][vnb2][:] = numpy.dot(Rmat, Rkvel[vnb1][vnb2][:])
+                    ipw = 0
+                    for (ir, ic) in mlist:
+                        for iw in xrange(N_om):
+    
+                    #        if(M[iw].real > 5.0 / beta):
+                    #            continue
+                            for iq in range(len(q_mesh_ex)):
+                                #if(Qmesh_ex[iq]==0 or iw+Qmesh_ex[iq]>=N_om ):
+                                # here use fermi distribution to truncate self energy mesh.
+                               # if(q_mesh_ex[iq] == 0 or iw + q_mesh_ex[iq] >= N_om or M[iw].real + q_mesh[iq] < -10.0 / beta or M[iw].real >10.0 / beta):
+                    #            if(iw + q_mesh_ex[iq] >= N_om or M[iw].real + q_mesh[iq] < -10.0 / beta or M[iw].real >10.0 / beta):
+                    #                continue
+                                if(iw + q_mesh_ex[iq] >= N_om):
+                                    continue
+    
+                                if (M[iw].real > omminplot) and (M[iw].real < ommaxplot):
+                                    # here use bandwin to construct match matrix for A and velocity.
+                                    Annkwl = Annkw[isp][Astart:Aend, Astart:Aend, iw]
+                                    Annkwr = Annkw[isp][Astart:Aend, Astart:Aend, iw + q_mesh_ex[iq]]
+                                    Rkveltr = Rkvel[vstart:vend, vstart:vend, ir]
+                                    Rkveltc = Rkvel[vstart:vend, vstart:vend, ic]
+                                    # print Annkwl.shape, Annkwr.shape, Rkveltr.shape, Rkveltc.shape
+                                    Pwtem[ipw, iq, iw] += numpy.dot(numpy.dot(numpy.dot(Rkveltr, Annkwl), Rkveltc), Annkwr).trace().real
+                        ipw += 1
+    
+                # k sum and spin sum.
+                self.Pw_optic += Pwtem * self.bz_weights[ik] / self.nsymm
+    
+        self.Pw_optic = mpi.all_reduce(mpi.world, self.Pw_optic, lambda x, y : x + y)
+        self.Pw_optic *= (2 - self.SP)
+    
+        # just back up TD_optic data
+        if mpi.is_master_node():
+            with open("TD_Optic_DMFT.dat", "w") as pwout:
+                #shape
+                L1,L2,L3=self.Pw_optic.shape
+                pwout.write("%s  %s  %s\n"%(L1,L2,L3))
+                #dump Qmesh
+                q_meshr=[i*deltaM for i in q_mesh_ex]
+                #dump self energy mesh
+                #dump Pw_optic
+                for iq in xrange(L2):
+                    pwout.write(str(q_meshr[iq])+"  ")
+                pwout.write("\n")
+                for iw in xrange(L3):
+                    pwout.write(str(M[iw].real)+"  ")
+                pwout.write("\n")
+                for i in xrange(L1):
+                    for iq in xrange(L2):
+                        for iw in xrange(L3):
+                            pwout.write(str(self.Pw_optic[i, iq, iw]) + "    ")
+                pwout.write("\n")
+        
+    # loadOpticTD is probably not needed
+    def loadOpticTD(self,OpticTDFile="TD_Optic_DMFT.dat", beta=50):
+        """ load optic conductivity distribution and calculate Optical Conductivty
+        """
+        if mpi.is_master_node():
+            with open(OpticTDFile,"r") as pw:
+                L1,L2,L3=(int(i) for i in pw.readline().split())
+                q_meshr=numpy.array([float(i) for i in pw.readline().split()])
+                M=numpy.array([float(i) for i in pw.readline().split()])
+                Pw_optic=numpy.array([float(i) for i in pw.readline().split()]).reshape(L1,L2,L3)
+        
+
+
+    def conductivity_and_seebeck(self, OpticTDFile="TD_Optic_DMFT.dat",  beta=50, save=True):
+        """ #return 1/T*A0, that is Conductivity in unit 1/V
+        calculate, save and return Conductivity
+        """
+        if mpi.is_master_node():
+           with open(OpticTDFile,"r") as pw:
+               L1,L2,L3=(int(i) for i in pw.readline().split())
+               q_meshr=numpy.array([float(i) for i in pw.readline().split()])
+               M=numpy.array([float(i) for i in pw.readline().split()])
+               Pw_optic=numpy.array([float(i) for i in pw.readline().split()]).reshape(L1,L2,L3)
+
+           omegaT = M * beta
+           A0 = numpy.zeros((L1,L2), dtype=numpy.float)
+           deltaM = M[1]-M[0]
+           for iq in xrange(L2):
+               # treat q = 0,  caclulate conductivity and seebeck
+               if (q_meshr[iq] == 0.0):
+                   # if q_meshr contains multiple entries with w=0, A1 is overwritten!
+                   A1 = numpy.zeros((L1, 1), dtype=numpy.float)
+                   Seebeck = numpy.zeros((L1, 1), dtype=numpy.float)
+                   for im in xrange(L1):
+                       for iw in xrange(L3):
+                           A0[im, iq] += beta * Pw_optic[im, iq, iw] * self.fermidis(omegaT[iw]) * self.fermidis(-omegaT[iw])
+                           A1[im] += beta * Pw_optic[im, iq, iw] *  self.fermidis(omegaT[iw]) * self.fermidis(-omegaT[iw]) * numpy.float(omegaT[iw])
+                       Seebeck[im] = -A1[im] / A0[im, iq]
+                       print "A0", A0[im, iq] *deltaM/beta
+                       print "A1", A1[im, iq] *deltaM/beta
+               # treat q ~= 0, calculate optical conductivity
+               else:
+                   for im in xrange(L1):
+                       for iw in xrange(L3):
+                           A0[im, iq] += Pw_optic[im, iq, iw] * (self.fermidis(omegaT[iw]) - self.fermidis(omegaT[iw] + q_meshr[iq] * beta)) / q_meshr[iq]
+
+           A0 *= deltaM
+           #cond = beta * self.tdintegral(beta, 0)[index]
+           print "V in bohr^3          ", self.vol
+           # transform to standard unit as in resistivity
+           OpticCon = A0 * 10700.0 / self.vol
+           Seebeck *= 86.17
+
+           # print
+           for im in xrange(L1):
+               for iq in xrange(L2):
+                   print "Conductivity in direction %d for q_mesh %d       %.4f  x 10^4 Ohm^-1 cm^-1" % (im, iq, OpticCon[im, iq])
+                   print "Resistivity in dircection %d for q_mesh %d       %.4f  x 10^-4 Ohm cm" % (im, iq, 1.0 / OpticCon[im, iq])
+               print "Seebeck in direction %d  for q = 0              %.4f  x 10^(-6) V/K" % (im, Seebeck[im])
+
+           # Store data
+           if save == True:
+             with open("OpticCon.dat", "w") as opt:
+                 for iq in xrange(L2):
+                    opt.write(str(q_meshr[iq]) + "   ")
+                    for im in xrange(L1):
+                        opt.write(str(OpticCon[im, iq]) + "   ")
+                    opt.write("\n")
+             with open("Seebeck.dat", "w") as see:
+                 for im in xrange(L1):
+                     see.write(str(Seebeck[im]) + "   ")
+
+           return OpticCon, Seebeck
+   
+

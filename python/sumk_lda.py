@@ -47,8 +47,8 @@ class SumkLDA:
             self.parproj_data = parproj_data
             self.symmpar_data = symmpar_data
             self.bands_data = bands_data
-            self.symm_par_data = symm_par_data
-            self.symm_corr_data = symm_corr_data
+            self.symmpar_data = symmpar_data
+            self.symmcorr_data = symmcorr_data
             self.transp_data = transp_data
             self.block_names = [ ['up','down'], ['ud'] ]
             self.n_spin_blocks_gf = [2,1]

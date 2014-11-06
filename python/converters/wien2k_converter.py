@@ -29,7 +29,6 @@ import string
 
 def read_fortran_file (filename):
     """ Returns a generator that yields all numbers in the Fortran file as float, one by one"""
-    import os.path
     if not(os.path.exists(filename)) : raise IOError, "File %s does not exist."%filename
     for line in open(filename,'r') :
 	for x in line.replace('D','E').split() : 
@@ -68,7 +67,6 @@ class Wien2kConverter:
         self.transp_subgrp = transp_subgrp
 
         # Checks if h5 file is there and repacks it if wanted:
-        import os.path
         if (os.path.exists(self.hdf_file) and repacking):
             self.__repack()
         
@@ -542,28 +540,13 @@ class Wien2kConverter:
 
         print "Read in %s files done!" %self.oubwin_file
 
-
         # Put data to HDF5 file
         ar = HDFArchive(self.hdf_file, 'a')
         if not (self.transp_subgrp in ar): ar.create_group(self.transp_subgrp)
-        # The subgroup containing the data. If it does not exist, it is created.
-        # If it exists, the data is overwritten!!!
-       
-        # Data from .pmat file
-        ar[self.transp_subgrp]['bandwin_opt'] = bandwin_opt
-        ar[self.transp_subgrp]['kp'] = kp
-        ar[self.transp_subgrp]['vk'] = vk
-        # Data from .struct file
-        ar[self.transp_subgrp]['latticetype'] = latticetype
-        ar[self.transp_subgrp]['latticeconstants'] = latticeconstants
-        ar[self.transp_subgrp]['latticeangles'] = latticeangles
-        # Data from .outputs file
-        ar[self.transp_subgrp]['nsymm'] = nsymm
-        ar[self.transp_subgrp]['symmcartesian'] = symmcartesian
-        ar[self.transp_subgrp]['taucartesian'] = taucartesian
-        # Data from .oubwin files
-        ar[self.transp_subgrp]['bandwin'] = bandwin
-
+        # The subgroup containing the data. If it does not exist, it is created. If it exists, the data is overwritten!!!
+        things_to_save = ['bandwin_opt', 'kp', 'vk', 'latticetype', 'latticeconstants', 'latticeangles', 'nsymm', 'symmcartesian',
+                        'taucartesian', 'bandwin']
+        for it in things_to_save: ar[self.transp_subgrp][it] = locals()[it]
         del ar
 
     def convert_symmetry_input(self, orbits, symm_file, symm_subgrp, SO, SP):

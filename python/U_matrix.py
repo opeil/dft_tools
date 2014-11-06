@@ -40,7 +40,7 @@ def U_matrix(l, radial_integrals=None, U_int=None, J_hund=None, basis="spherical
     if basis == "cubic": T = spherical_to_cubic(l)
     if basis == "other" and T == None:
         raise ValueError("U_matrix: provide T for other bases.")
-    if T != None: transform_U_matrix(U_matrix, T)
+    if T != None: U_matrix = transform_U_matrix(U_matrix, T)
 
     return U_matrix
 
@@ -76,6 +76,7 @@ def U_matrix_kanamori(n_orb, U_int, J_hund):
 
     return U, Uprime
 
+#FIXME WIEN CONVENTION first eg then t2g
 # Get t2g or eg components
 def t2g_submatrix(U):
     """Return only the t2g part of the full d-manifold two- or four-index U matrix."""

@@ -43,8 +43,8 @@ class Symmetry:
            """
 
         assert type(hdf_file)==StringType,"hdf_file must be a filename"; self.hdf_file = hdf_file
-        thingstoread = ['n_s','n_atoms','perm','orbits','SO','SP','time_inv','mat','mat_tinv']
-        for it in thingstoread: exec "self.%s = 0"%it
+        things_to_read = ['n_s','n_atoms','perm','orbits','SO','SP','time_inv','mat','mat_tinv']
+        for it in things_to_read: setattr(self,it,0)
 
         if (mpi.is_master_node()):
             #Read the stuff on master:
@@ -54,12 +54,12 @@ class Symmetry:
             else:
                 ar2 = ar[subgroup]
 
-            for it in thingstoread: exec "self.%s = ar2['%s']"%(it,it)
+            for it in things_to_read: setattr(self,it,ar2[it])
             del ar2
             del ar
 
-        #broadcasting
-        for it in thingstoread: exec "self.%s = mpi.bcast(self.%s)"%(it,it)
+        # Broadcasting
+        for it in things_to_read: setattr(self,it,mpi.bcast(getattr(self,it)))
 
         # now define the mapping of orbitals:
         # self.map[iorb]=jorb gives the permutation of the orbitals as given in the list, when the
@@ -108,7 +108,7 @@ class Symmetry:
                 if (isinstance(obj[0],BlockGf)):
 
                     tmp = obj[iorb].copy()
-                    if (self.time_inv[in_s]): tmp <<= tmp.transpose()
+                    if (self.time_inv[in_s]): tmp << tmp.transpose()
                     for sig,gf in tmp: tmp[sig].from_L_G_R(self.mat[in_s][iorb],tmp[sig],self.mat[in_s][iorb].conjugate().transpose())
                     tmp *= 1.0/self.n_s
                     symm_obj[jorb] += tmp
@@ -135,14 +135,14 @@ class Symmetry:
                                                         self.mat[in_s][iorb].conjugate().transpose()) / self.n_s
 
 
-# This does not what it is supposed to do, check how this should work:
+# Markus: This does not what it is supposed to do, check how this should work (keep for now)
 #        if ((self.SO==0) and (self.SP==0)):
 #            # add time inv:
             #mpi.report("Add time inversion")
 #            for iorb in range(self.n_orbits):
 #                if (isinstance(symm_obj[0],BlockGf)):
 #                    tmp = symm_obj[iorb].copy()
-#                    tmp <<= tmp.transpose()
+#                    tmp << tmp.transpose()
 #                    for sig,gf in tmp: tmp[sig].from_L_G_R(self.mat_tinv[iorb],tmp[sig],self.mat_tinv[iorb].transpose().conjugate())
 #                    symm_obj[iorb] += tmp
 #                    symm_obj[iorb] /= 2.0

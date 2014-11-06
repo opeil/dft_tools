@@ -42,15 +42,17 @@ class Wien2kConverter:
     Conversion from Wien2k output to an hdf5 file that can be used as input for the SumkLDA class.
     """
 
-    def __init__(self, filename, lda_subgrp = 'SumK_LDA', symm_subgrp = 'SymmCorr', transp_subgrp = 'Transp', repacking = False):
+    def __init__(self, filename, lda_subgrp = 'lda_input', symmcorr_subgrp = 'lda_symmcorr_input', 
+                                 parproj_subgrp='lda_parproj_input', symmpar_subgrp='lda_symmpar_input', 
+                                 bands_subgrp = 'lda_bands_input', transp_subgrp = 'lda_transp_input', repacking = False):
         """
         Init of the class. Variable filename gives the root of all filenames, e.g. case.ctqmcout, case.h5, and so on. 
         """
 
-        assert type(filename)==StringType,"LDA_file must be a filename"
+        assert type(filename)==StringType, "Please provide the LDA files' base name as a string."
         self.hdf_file = filename+'.h5'
         self.lda_file = filename+'.ctqmcout'
-        self.symm_file = filename+'.symqmc'
+        self.symmcorr_file = filename+'.symqmc'
         self.parproj_file = filename+'.parproj'
         self.symmpar_file = filename+'.sympar'
         self.band_file = filename+'.outband'
@@ -59,7 +61,10 @@ class Wien2kConverter:
         self.struct_file = filename+'.struct'
         self.oubwin_file = filename+'.oubwin'
         self.lda_subgrp = lda_subgrp
-        self.symm_subgrp = symm_subgrp
+        self.symmcorr_subgrp = symmcorr_subgrp
+        self.parproj_subgrp = parproj_subgrp
+        self.symmpar_subgrp = symmpar_subgrp
+        self.bands_subgrp = bands_subgrp
         self.transp_subgrp = transp_subgrp
 
         # Checks if h5 file is there and repacks it if wanted:
@@ -74,7 +79,6 @@ class Wien2kConverter:
         Reads the input files, and stores the data in the HDFfile
         """
         
-                   
         # Read and write only on the master node
         if not (mpi.is_master_node()): return
         mpi.report("Reading input from %s..."%self.lda_file)
@@ -101,7 +105,7 @@ class Wien2kConverter:
             # now read the information about the shells:
             corr_shells = [ [ int(R.next()) for i in range(6) ] for icrsh in range(n_corr_shells) ]    # reads iatom, sort, l, dim, SO flag, irep
 
-            self.inequiv_shells(corr_shells)              # determine the number of inequivalent correlated shells, has to be known for further reading...
+            self.inequiv_shells(corr_shells)              # determine the number of inequivalent correlated shells, needed for further reading
 
             use_rotations = 1
             rot_mat = [numpy.identity(corr_shells[icrsh][3],numpy.complex_) for icrsh in xrange(n_corr_shells)]
@@ -120,8 +124,6 @@ class Wien2kConverter:
                 if (SP==1):             # read time inversion flag:
                     rot_mat_time_inv[icrsh] = int(R.next())
                     
-                  
-            
             # Read here the info for the transformation of the basis:
             n_reps = [1 for i in range(self.n_inequiv_corr_shells)]
             dim_reps = [0 for i in range(self.n_inequiv_corr_shells)]
@@ -143,22 +145,18 @@ class Wien2kConverter:
                 for i in xrange(lmax):
                     for j in xrange(lmax):
                         T[icrsh][i,j] += 1j * R.next()
-
     
             # Spin blocks to be read:
             n_spin_blocs = SP + 1 - SO   
                  
-        
             # read the list of n_orbitals for all k points
             n_orbitals = numpy.zeros([n_k,n_spin_blocs],numpy.int)
             for isp in range(n_spin_blocs):
                 for ik in xrange(n_k):
                     n_orbitals[ik,isp] = int(R.next())
             
-
             # Initialise the projectors:
             proj_mat = numpy.zeros([n_k,n_spin_blocs,n_corr_shells,max(numpy.array(corr_shells)[:,3]),max(n_orbitals)],numpy.complex_)
-
 
             # Read the projectors from the file:
             for ik in xrange(n_k):
@@ -174,7 +172,6 @@ class Wien2kConverter:
                         for i in xrange(no):
                             for j in xrange(n_orbitals[ik][isp]):
                                 proj_mat[ik,isp,icrsh,i,j] += 1j * R.next()
-
           
             # now define the arrays for weights and hopping ...
             bz_weights = numpy.ones([n_k],numpy.float_)/ float(n_k)  # w(k_index),  default normalisation 
@@ -188,7 +185,7 @@ class Wien2kConverter:
             bz_weights[:] /= sm 
 
             # Grab the H
-            # we use now the convention of a DIAGONAL Hamiltonian!!!!
+            # we use now the convention of a DIAGONAL Hamiltonian -- convention for Wien2K.
             for isp in range(n_spin_blocs):
                 for ik in xrange(n_k) :
                     no = n_orbitals[ik,isp]
@@ -196,76 +193,41 @@ class Wien2kConverter:
                         hopping[ik,isp,i,i] = R.next() * energy_unit
             
             # keep some things that we need for reading parproj:
-            self.n_shells = n_shells
-            self.shells = shells
-            self.n_corr_shells = n_corr_shells
-            self.corr_shells = corr_shells
-            self.n_spin_blocs = n_spin_blocs
-            self.n_orbitals = n_orbitals
-            self.n_k = n_k
-            self.SO = SO
-            self.SP = SP
-            self.energy_unit = energy_unit
+            things_to_set = ['n_shells','shells','n_corr_shells','corr_shells','n_spin_blocs','n_orbitals','n_k','SO','SP','energy_unit'] 
+            for it in things_to_set: setattr(self,it,locals()[it])
         except StopIteration : # a more explicit error if the file is corrupted.
             raise "Wien2k_converter : reading file lda_file failed!"
 
         R.close()
+        # Reading done!
         
-        #-----------------------------------------
-        # Store the input into HDF5:
+        # Save it to the HDF:
         ar = HDFArchive(self.hdf_file,'a')
         if not (self.lda_subgrp in ar): ar.create_group(self.lda_subgrp) 
-        # The subgroup containing the data. If it does not exist, it is created.
-        # If it exists, the data is overwritten!!!
-        
-        ar[self.lda_subgrp]['energy_unit'] = energy_unit
-        ar[self.lda_subgrp]['n_k'] = n_k
-        ar[self.lda_subgrp]['k_dep_projection'] = k_dep_projection
-        ar[self.lda_subgrp]['SP'] = SP
-        ar[self.lda_subgrp]['SO'] = SO
-        ar[self.lda_subgrp]['charge_below'] = charge_below
-        ar[self.lda_subgrp]['density_required'] = density_required
-        ar[self.lda_subgrp]['symm_op'] = symm_op
-        ar[self.lda_subgrp]['n_shells'] = n_shells
-        ar[self.lda_subgrp]['shells'] = shells
-        ar[self.lda_subgrp]['n_corr_shells'] = n_corr_shells
-        ar[self.lda_subgrp]['corr_shells'] = corr_shells
-        ar[self.lda_subgrp]['use_rotations'] = use_rotations
-        ar[self.lda_subgrp]['rot_mat'] = rot_mat
-        ar[self.lda_subgrp]['rot_mat_time_inv'] = rot_mat_time_inv
-        ar[self.lda_subgrp]['n_reps'] = n_reps
-        ar[self.lda_subgrp]['dim_reps'] = dim_reps
-        ar[self.lda_subgrp]['T'] = T
-        ar[self.lda_subgrp]['n_orbitals'] = n_orbitals
-        ar[self.lda_subgrp]['proj_mat'] = proj_mat
-        ar[self.lda_subgrp]['bz_weights'] = bz_weights
-        ar[self.lda_subgrp]['hopping'] = hopping
-        
+        # The subgroup containing the data. If it does not exist, it is created. If it exists, the data is overwritten!
+        things_to_save = ['energy_unit','n_k','k_dep_projection','SP','SO','charge_below','density_required',
+                          'symm_op','n_shells','shells','n_corr_shells','corr_shells','use_rotations','rot_mat',
+                          'rot_mat_time_inv','n_reps','dim_reps','T','n_orbitals','proj_mat','bz_weights','hopping']
+        for it in things_to_save: ar[self.lda_subgrp][it] = locals()[it]
         del ar
-              
-        # Symmetries are used, 
-        # Now do the symmetries for correlated orbitals:
-        self.read_symmetry_input(orbits=corr_shells,symm_file=self.symm_file,symm_subgrp=self.symm_subgrp,SO=SO,SP=SP)
+
+        # Symmetries are used, so now convert symmetry information for *correlated* orbitals:
+        self.convert_symmetry_input(orbits=corr_shells,symm_file=self.symmcorr_file,symm_subgrp=self.symmcorr_subgrp,SO=self.SO,SP=self.SP)
 
 
-    def convert_parproj_input(self, par_proj_subgrp='SumK_LDA_ParProj', symm_par_subgrp='SymmPar'):
+    def convert_parproj_input(self):
         """
-        Reads the input for the partial charges projectors from case.parproj, and stores it in the symm_par_subgrp
+        Reads the input for the partial charges projectors from case.parproj, and stores it in the symmpar_subgrp
         group in the HDF5.
         """
 
         if not (mpi.is_master_node()): return
-
-        self.par_proj_subgrp = par_proj_subgrp
-        self.symm_par_subgrp = symm_par_subgrp
-
         mpi.report("Reading parproj input from %s..."%self.parproj_file)
 
         dens_mat_below = [ [numpy.zeros([self.shells[ish][3],self.shells[ish][3]],numpy.complex_) for ish in range(self.n_shells)] 
                            for isp in range(self.n_spin_blocs) ]
 
         R = read_fortran_file(self.parproj_file)
-        #try:
 
         n_parproj = [int(R.next()) for i in range(self.n_shells)]
         n_parproj = numpy.array(n_parproj)
@@ -280,8 +242,8 @@ class Wien2kConverter:
             # read first the projectors for this orbital:
             for ik in xrange(self.n_k):
                 for ir in range(n_parproj[ish]):
+
                     for isp in range(self.n_spin_blocs):
-                                    
                         for i in xrange(self.shells[ish][3]):    # read real part:
                             for j in xrange(self.n_orbitals[ik][isp]):
                                 proj_mat_pc[ik,isp,ish,ir,i,j] = R.next()
@@ -311,37 +273,31 @@ class Wien2kConverter:
                 for j in xrange(self.shells[ish][3]):
                     rot_mat_all[ish][i,j] += 1j * R.next()
                     
-            #print Dens_Mat_below[0][ish],Dens_Mat_below[1][ish]
-            
             if (self.SP):
                 rot_mat_all_time_inv[ish] = int(R.next())
 
         R.close()
+        # Reading done!
 
-        #-----------------------------------------
-        # Store the input into HDF5:
+        # Save it to the HDF:
         ar = HDFArchive(self.hdf_file,'a')
-        if not (self.par_proj_subgrp in ar): ar.create_group(self.par_proj_subgrp) 
-        # The subgroup containing the data. If it does not exist, it is created.
-        # If it exists, the data is overwritten!!!
-        thingstowrite = ['dens_mat_below','n_parproj','proj_mat_pc','rot_mat_all','rot_mat_all_time_inv']
-        for it in thingstowrite: exec "ar['%s']['%s'] = %s"%(self.par_proj_subgrp,it,it)
+        if not (self.parproj_subgrp in ar): ar.create_group(self.parproj_subgrp) 
+        # The subgroup containing the data. If it does not exist, it is created. If it exists, the data is overwritten!
+        things_to_save = ['dens_mat_below','n_parproj','proj_mat_pc','rot_mat_all','rot_mat_all_time_inv']
+        for it in things_to_save: ar[self.parproj_subgrp][it] = locals()[it]
         del ar
 
-        # Symmetries are used, 
-        # Now do the symmetries for all orbitals:
-        self.read_symmetry_input(orbits=self.shells,symm_file=self.symmpar_file,symm_subgrp=self.symm_par_subgrp,SO=self.SO,SP=self.SP)
+        # Symmetries are used, so now convert symmetry information for *all* orbitals:
+        self.convert_symmetry_input(orbits=self.shells,symm_file=self.symmpar_file,symm_subgrp=self.symmpar_subgrp,SO=self.SO,SP=self.SP)
 
 
-    def convert_bands_input(self, bands_subgrp = 'SumK_LDA_Bands'):
+    def convert_bands_input(self):
         """
         Converts the input for momentum resolved spectral functions, and stores it in bands_subgrp in the
         HDF5.
         """
 
         if not (mpi.is_master_node()): return
-
-        self.bands_subgrp = bands_subgrp
         mpi.report("Reading bands input from %s..."%self.band_file)
 
         R = read_fortran_file(self.band_file)
@@ -408,17 +364,14 @@ class Wien2kConverter:
             raise "Wien2k_converter : reading file band_file failed!"
 
         R.close()
-        # reading done!
+        # Reading done!
 
-        #-----------------------------------------
-        # Store the input into HDF5:
+        # Save it to the HDF:
         ar = HDFArchive(self.hdf_file,'a')
         if not (self.bands_subgrp in ar): ar.create_group(self.bands_subgrp) 
-
-        # The subgroup containing the data. If it does not exist, it is created.
-        # If it exists, the data is overwritten!!!
-        thingstowrite = ['n_k','n_orbitals','proj_mat','hopping','n_parproj','proj_mat_pc']
-        for it in thingstowrite: exec "ar['%s']['%s'] = %s"%(self.bands_subgrp,it,it)
+        # The subgroup containing the data. If it does not exist, it is created. If it exists, the data is overwritten!
+        things_to_save = ['n_k','n_orbitals','proj_mat','hopping','n_parproj','proj_mat_pc']
+        for it in things_to_save: ar[self.bands_subgrp][it] = locals()[it]
         del ar
    
 
@@ -438,7 +391,6 @@ class Wien2kConverter:
         SO = ar[self.lda_subgrp]['SO']
         n_k = ar[self.lda_subgrp]['n_k']
         del ar
-
 
         # Read relevant data from .pmat file
         ############################################
@@ -614,14 +566,12 @@ class Wien2kConverter:
 
         del ar
 
-
-    def read_symmetry_input(self, orbits, symm_file, symm_subgrp, SO, SP):
+    def convert_symmetry_input(self, orbits, symm_file, symm_subgrp, SO, SP):
         """
         Reads input for the symmetrisations from symm_file, which is case.sympar or case.symqmc.
         """
 
         if not (mpi.is_master_node()): return
-
         mpi.report("Reading symmetry input from %s..."%symm_file)
 
         n_orbits = len(orbits)
@@ -649,9 +599,6 @@ class Wien2kConverter:
                         for j in xrange(orbits[orb][3]):
                             mat[in_s][orb][i,j] += 1j * R.next()      # imaginary part
 
-            # determine the inequivalent shells:
-            #SHOULD BE FINALLY REMOVED, PUT IT FOR ALL ORBITALS!!!!! (PS: FIXME?)
-            #self.inequiv_shells(orbits)
             mat_tinv = [numpy.identity(orbits[orb][3],numpy.complex_)
                         for orb in range(n_orbits)]
 
@@ -671,12 +618,13 @@ class Wien2kConverter:
             raise "Wien2k_converter : reading file symm_file failed!"
         
         R.close()
+        # Reading done!
 
         # Save it to the HDF:
         ar=HDFArchive(self.hdf_file,'a')
         if not (symm_subgrp in ar): ar.create_group(symm_subgrp)
-        thingstowrite = ['n_s','n_atoms','perm','orbits','SO','SP','time_inv','mat','mat_tinv']
-        for it in thingstowrite: exec "ar['%s']['%s'] = %s"%(symm_subgrp,it,it)
+        things_to_save = ['n_s','n_atoms','perm','orbits','SO','SP','time_inv','mat','mat_tinv']
+        for it in things_to_save: ar[symm_subgrp][it] = locals()[it]
         del ar
         
         
@@ -689,14 +637,13 @@ class Wien2kConverter:
         import subprocess
 
         if not (mpi.is_master_node()): return
-
         mpi.report("Repacking the file %s"%self.hdf_file)
 
-        retcode = subprocess.call(["h5repack","-i%s"%self.hdf_file, "-otemphgfrt.h5"])
-        if (retcode!=0):
+        return_code = subprocess.call(["h5repack", "-i %s"%self.hdf_file, "-o temphgfrt.h5"])
+        if (return_code != 0):
             mpi.report("h5repack failed!")
         else:
-            subprocess.call(["mv","-f","temphgfrt.h5","%s"%self.hdf_file])
+            subprocess.call(["mv", "-f", "temphgfrt.h5", "%s"%self.hdf_file])
             
 
 

@@ -649,7 +649,7 @@ class SumkLDATools(SumkLDA):
             mu = self.chemical_potential
             n_om = len(self.omega)
         else:
-            assert n_om != None , "Number of omega points (n_om) needed!"
+            assert n_om is not None , "Number of omega points (n_om) needed!"
             self.omega = numpy.linspace(energywindow[0],energywindow[1],n_om)
             mu = 0.0
 

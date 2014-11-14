@@ -612,8 +612,7 @@ class SumkLDATools(SumkLDA):
 
     def fermidis(self, x):
         return 1.0/(numpy.exp(x)+1)
-
-
+    
     def transport_distribution(self, dir_list=[(0,0)], broadening=0.01, energywindow=None, Om_mesh=[0.0], beta=40, LDA_only=False, n_om=None, res_subgrp='transp_output'):
         """calculate Tr A(k,w) v(k) A(k, w+q) v(k) and optics.
         energywindow: regime for omega integral
@@ -647,6 +646,7 @@ class SumkLDATools(SumkLDA):
             self.omega = numpy.array([round(x.real,12) for x in self.Sigma_imp[0].mesh])
             mu = self.chemical_potential
             n_om = len(self.omega)
+            print "Using omega mesh provided by Sigma."
 
             if energywindow is not None:
                 # Find according window in Sigma mesh
@@ -672,6 +672,11 @@ class SumkLDATools(SumkLDA):
             self.omega = numpy.linspace(energywindow[0],energywindow[1],n_om)
             mu = 0.0
 
+        if (abs(self.fermidis(self.omega[0]*beta)*self.fermidis(-self.omega[0]*beta)) > 1e-5
+            or abs(self.fermidis(self.omega[-1]*beta)*self.fermidis(-self.omega[-1]*beta)) > 1e-5):
+                print "\n##########################################"
+                print "WARNING: Energywindow might be too narrow!"
+                print "##########################################\n"
 
         d_omega = round(numpy.abs(self.omega[0] - self.omega[1]), 12)
 

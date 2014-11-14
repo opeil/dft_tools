@@ -641,26 +641,39 @@ class SumkLDATools(SumkLDA):
         
         # use k-dependent-projections.
         assert self.k_dep_projection == 1, "Not implemented!"
-        
+
         # Define mesh for Greens function and the used energy range
         if (LDA_only == False):
-            print "Using omega mesh and n_om given by Sigma!"
             self.omega = numpy.array([round(x.real,12) for x in self.Sigma_imp[0].mesh])
             mu = self.chemical_potential
             n_om = len(self.omega)
+
+            if energywindow is not None:
+                # Find according window in Sigma mesh
+                ioffset = numpy.sum(self.omega < energywindow[0])
+                self.omega = self.omega[numpy.logical_and(self.omega >= energywindow[0], self.omega <= energywindow[1])]
+                n_om = len(self.omega)
+                
+                # Truncate Sigma to given omega window
+                for orb, Sig in enumerate(self.Sigma_imp):
+                    Sigma_save = self.Sigma_imp[orb].copy()
+                    a_list = [a for a, al in self.gf_struct_corr[orb]]
+                    glist = lambda : [ GfReFreq(indices = al, window=(self.omega[0], self.omega[-1]),n_points=n_om) for a, al in self.gf_struct_corr[orb]]
+                    self.Sigma_imp[orb] = BlockGf(name_list = a_list, block_list = glist(),make_copies=False)
+                    for i,g in self.Sigma_imp[orb]:
+                        for iL in g.indices:
+                            for iR in g.indices:
+                                for iom in xrange(n_om):
+                                    g.data[iom,iL,iR]= Sigma_save[i].data[ioffset+iom,iL,iR]
+            
         else:
-            assert n_om is not None , "Number of omega points (n_om) needed!"
+            assert n_om is not None, "Number of omega points (n_om) needed!"
+            assert energywindow is not None, "Energy window needed!" 
             self.omega = numpy.linspace(energywindow[0],energywindow[1],n_om)
             mu = 0.0
 
 
         d_omega = round(numpy.abs(self.omega[0] - self.omega[1]), 12)
-        if energywindow is None:
-            ommin = self.omega[0]
-            ommax = self.omega[n_om - 1]
-        else:
-            ommin = energywindow[0]
-            ommax = energywindow[1]
 
         # define exact mesh for optic conductivity
         Om_mesh_ex = numpy.array([int(x / d_omega) for x in Om_mesh])
@@ -668,7 +681,9 @@ class SumkLDATools(SumkLDA):
 
         if mpi.is_master_node():
             print "Chemical potential: ", mu
-            print "Using n_om = %s points in the energywindow [%s,%s]"%(numpy.sum(numpy.logical_and(self.omega >= ommin, self.omega <= ommax)), ommin, ommax)
+            print "Using n_om = %s points in the energywindow [%s,%s]"%(n_om, self.omega[0], self.omega[-1])
+            print "omega vector is:"
+            print self.omega
             print "Omega mesh interval  ", d_omega
             print "Provided Om_mesh   ", numpy.array(Om_mesh)
             print "Pinnend Om_mesh to  ", self.Om_meshr
@@ -681,7 +696,7 @@ class SumkLDATools(SumkLDA):
         bln = self.block_names[self.SO]
         ntoi = self.names_to_ind[self.SO]
           
-        S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), window=(self.omega[0], self.omega[n_om-1]), n_points = n_om)) 
+        S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), window=(self.omega[0], self.omega[-1]), n_points = n_om)) 
                 for isp in range(self.n_spin_blocks_input) ], make_copies=False)
         mupat = [numpy.identity(self.n_orbitals[ik][isp], numpy.complex_) * mu for isp in range(self.n_spin_blocks_input)] # construct mupat
         Annkw = [numpy.zeros((self.n_orbitals[ik][isp], self.n_orbitals[ik][isp], n_om), dtype=numpy.complex_) for isp in range(self.n_spin_blocks_input)]
@@ -691,7 +706,7 @@ class SumkLDATools(SumkLDA):
             unchangesize = all([ self.n_orbitals[ik][isp] == mupat[isp].shape[0] for isp in range(self.n_spin_blocks_input)])
             if (not unchangesize):
                # recontruct green functions.
-               S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), window = (self.omega[0], self.omega[n_om-1]), n_points = n_om)) 
+               S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), window = (self.omega[0], self.omega[-1]), n_points = n_om)) 
                        for isp in range(self.n_spin_blocks_input) ], make_copies=False)
                # construct mupat
                mupat = [numpy.identity(self.n_orbitals[ik][isp], numpy.complex_) * mu for isp in range(self.n_spin_blocks_input)]
@@ -745,26 +760,17 @@ class SumkLDATools(SumkLDA):
                     ipw = 0
                     for (ir, ic) in dir_list:
                         for iw in xrange(n_om):
-                            
-                     #       if(self.omega[iw] > 5.0 / beta):
-                     #           continue
                             for iq in range(len(Om_mesh_ex)):
-                                #if(Qmesh_ex[iq]==0 or iw+Qmesh_ex[iq]>=n_om ):
-                                # here use fermi distribution to truncate self energy mesh.
-                                # if(Om_mesh_ex[iq] == 0 or iw + Om_mesh_ex[iq] >= n_om or self.omega[iw] + Om_mesh[iq] < -10.0 / beta or self.omega[iw] >10.0 / beta):
-                    #            if(iw + Om_mesh_ex[iq] >= n_om or self.omega[iw] + Om_mesh[iq] < -10.0 / beta or self.omega[iw] >10.0 / beta):
-                    #                continue
                                 if(iw + Om_mesh_ex[iq] >= n_om):
                                     continue
-    
-                                if (self.omega[iw] >= ommin) and (self.omega[iw] <= ommax):
-                                    # here use bandwin to construct match matrix for A and velocity.
-                                    Annkwl = Annkw[isp][Astart:Aend, Astart:Aend, iw]
-                                    Annkwr = Annkw[isp][Astart:Aend, Astart:Aend, iw + Om_mesh_ex[iq]]
-                                    Rkveltr = Rkvel[vstart:vend, vstart:vend, ir]
-                                    Rkveltc = Rkvel[vstart:vend, vstart:vend, ic]
-                                    # print Annkwl.shape, Annkwr.shape, Rkveltr.shape, Rkveltc.shape
-                                    Pwtem[ipw, iq, iw] += numpy.dot(numpy.dot(numpy.dot(Rkveltr, Annkwl), Rkveltc), Annkwr).trace().real
+                                 
+                                # construct matrix for A and velocity.
+                                Annkwl = Annkw[isp][Astart:Aend, Astart:Aend, iw]
+                                Annkwr = Annkw[isp][Astart:Aend, Astart:Aend, iw + Om_mesh_ex[iq]]
+                                Rkveltr = Rkvel[vstart:vend, vstart:vend, ir]
+                                Rkveltc = Rkvel[vstart:vend, vstart:vend, ic]
+                                # print Annkwl.shape, Annkwr.shape, Rkveltr.shape, Rkveltc.shape
+                                Pwtem[ipw, iq, iw] += numpy.dot(numpy.dot(numpy.dot(Rkveltr, Annkwl), Rkveltc), Annkwr).trace().real
                         ipw += 1
                         
                 # k sum and spin sum.

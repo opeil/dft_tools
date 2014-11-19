@@ -1,8 +1,8 @@
 
-SumK_LDA
+SumK_DFT
 ========
 
 .. toctree::
    :maxdepth: 1
 
-   analyse_BS
+   put_Sigma

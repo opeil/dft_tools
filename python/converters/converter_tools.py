@@ -32,7 +32,7 @@ class ConverterTools:
             for x in line.split(): yield string.atof(x)
 
 
-    def __repack(self):
+    def _repack(self):
         """Calls the h5repack routine, in order to reduce the file size of the hdf5 archive.
            Should only be used BEFORE the first invokation of HDFArchive in the program, otherwise
            the hdf5 linking is broken!!!"""

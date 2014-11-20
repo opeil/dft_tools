@@ -37,7 +37,7 @@ class SumkDFTTools(SumkDFT):
         self.G_upfold_refreq = None
         SumkDFT.__init__(self, hdf_file=hdf_file, mu=mu, h_field=h_field, use_dft_blocks=use_dft_blocks,
                           dft_data=dft_data, symmcorr_data=symmcorr_data, parproj_data=parproj_data, 
-                          symmpar_data=symmpar_data, bands_data=bands_data)
+                          symmpar_data=symmpar_data, bands_data=bands_data, transp_data=transp_data)
 
 
     def downfold_pc(self,ik,ir,ish,bname,gf_to_downfold,gf_inp):
@@ -589,14 +589,14 @@ class SumkDFTTools(SumkDFT):
     def fermidis(self, x):
         return 1.0/(numpy.exp(x)+1)
     
-    def transport_distribution(self, dir_list=[(0,0)], broadening=0.01, energywindow=None, Om_mesh=[0.0], beta=40, LDA_only=False, n_om=None, res_subgrp='transp_output'):
+    def transport_distribution(self, dir_list=[(0,0)], broadening=0.01, energywindow=None, Om_mesh=[0.0], beta=40, DFT_only=False, n_om=None, res_subgrp='transp_output'):
         """calculate Tr A(k,w) v(k) A(k, w+q) v(k) and optics.
         energywindow: regime for omega integral
         Om_mesh: contains the frequencies of the optic conductivitity. Om_mesh is repinned to the self-energy mesh
         (hence exact values might be different from those given in Om_mesh)
         dir_list: list to defines the indices of directions. xx,yy,zz,xy,yz,zx. 
         ((0, 0) --> xx, (1, 1) --> yy, (0, 2) --> xz, default: (0, 0))
-        LDA_only: Use Sigma = 0 (Issue to solve: code still needs self-energy for mesh) 
+        DFT_only: Use Sigma = 0 (Issue to solve: code still needs self-energy for mesh) 
         """
        
         # Check if wien converter was called
@@ -618,7 +618,7 @@ class SumkDFTTools(SumkDFT):
         assert self.k_dep_projection == 1, "Not implemented!"
 
         # Define mesh for Greens function and the used energy range
-        if (LDA_only == False):
+        if (DFT_only == False):
             self.omega = numpy.array([round(x.real,12) for x in self.Sigma_imp[0].mesh])
             mu = self.chemical_potential
             n_om = len(self.omega)
@@ -631,12 +631,12 @@ class SumkDFTTools(SumkDFT):
                 n_om = len(self.omega)
                 
                 # Truncate Sigma to given omega window
-                for orb, Sig in enumerate(self.Sigma_imp):
-                    Sigma_save = self.Sigma_imp[orb].copy()
-                    a_list = [a for a, al in self.gf_struct_corr[orb]]
-                    glist = lambda : [ GfReFreq(indices = al, window=(self.omega[0], self.omega[-1]),n_points=n_om) for a, al in self.gf_struct_corr[orb]]
-                    self.Sigma_imp[orb] = BlockGf(name_list = a_list, block_list = glist(),make_copies=False)
-                    for i,g in self.Sigma_imp[orb]:
+                for icrsh in range(self.n_corr_shells):
+                    Sigma_save = self.Sigma_imp[icrsh].copy()
+                    spn = self.spin_block_names[self.corr_shells[icrsh][4]]
+                    glist = lambda : [ GfReFreq(indices = inner, window=(self.omega[0], self.omega[-1]),n_points=n_om) for block, inner in self.gf_struct_sumk[icrsh]]
+                    self.Sigma_imp[icrsh] = BlockGf(name_list = spn, block_list = glist(),make_copies=False)
+                    for i,g in self.Sigma_imp[icrsh]:
                         for iL in g.indices:
                             for iR in g.indices:
                                 for iom in xrange(n_om):
@@ -674,8 +674,8 @@ class SumkDFTTools(SumkDFT):
     
         ik = 0
         
-        bln = self.block_names[self.SO]
-        ntoi = self.names_to_ind[self.SO]
+        bln = self.spin_block_names[self.SO]
+        ntoi = self.spin_names_to_ind[self.SO]
           
         S = BlockGf(name_block_generator=[(bln[isp], GfReFreq(indices=range(self.n_orbitals[ik][isp]), window=(self.omega[0], self.omega[-1]), n_points = n_om)) 
                 for isp in range(self.n_spin_blocks_input) ], make_copies=False)
@@ -704,7 +704,7 @@ class SumkDFTTools(SumkDFT):
                 MS[ibl] = self.hopping[ik,ind,0:n_orb,0:n_orb].real - mupat[ibl]
             S -= MS
             
-            if (LDA_only == False):
+            if (DFT_only == False):
                 tmp = S.copy()    # init temporary storage
                 # form self energy from impurity self energy and double counting term.
                 stmp = self.add_dc()
@@ -716,7 +716,7 @@ class SumkDFTTools(SumkDFT):
             S.invert()
 
             for isp in range(self.n_spin_blocks_input):
-                Annkw[isp].real = -copy.deepcopy(S[self.block_names[self.SO][isp]].data.swapaxes(0,1).swapaxes(1,2)).imag / numpy.pi
+                Annkw[isp].real = -copy.deepcopy(S[self.spin_block_names[self.SO][isp]].data.swapaxes(0,1).swapaxes(1,2)).imag / numpy.pi
             
             for isp in range(self.n_spin_blocks_input):
                 if(ik%100==0):

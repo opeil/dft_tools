@@ -34,7 +34,8 @@ class SumkDFT:
 
     def __init__(self, hdf_file, mu = 0.0, h_field = 0.0, use_dft_blocks = False, 
 	         dft_data = 'dft_input', symmcorr_data = 'dft_symmcorr_input', parproj_data = 'dft_parproj_input', 
-                 symmpar_data = 'dft_symmpar_input', bands_data = 'dft_bands_input', dft_output = 'dft_output'):
+                 symmpar_data = 'dft_symmpar_input', bands_data = 'dft_bands_input', dft_output = 'dft_output',
+                 transp_data = 'dft_transp_input'):
         """
         Initialises the class from data previously stored into an HDF5
         """
@@ -48,6 +49,7 @@ class SumkDFT:
             self.parproj_data = parproj_data
             self.symmpar_data = symmpar_data
             self.bands_data = bands_data
+            self.transp_data = transp_data
             self.dft_output = dft_output
             self.G_upfold = None
             self.h_field = h_field
@@ -79,8 +81,8 @@ class SumkDFT:
             #-----
             # If these quantities are not in HDF, set them up
             optional_things = ['gf_struct_solver','sumk_to_solver','solver_to_sumk','solver_to_sumk_block','chemical_potential','dc_imp','dc_energ','deg_shells']
-            self.subgroup_present, self.value_read = self.read_input_from_hdf(subgrp = self.dft_output, things_to_read = [], 
-                                                                              optional_things = optional_things)
+            self.subgroup_present, self.value_read = self.read_input_from_hdf(subgrp = self.dft_output, things_to_read = [], optional_things = optional_things)
+
             if (not self.subgroup_present) or (not self.value_read['gf_struct_solver']):
                 # No gf_struct was stored in HDF, so first set a standard one:
                 self.gf_struct_solver = [ dict([ (sp, range(self.corr_shells[self.inequiv_to_corr[ish]][3]) )

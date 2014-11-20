@@ -19,7 +19,11 @@
 # TRIQS. If not, see <http://www.gnu.org/licenses/>.
 #
 ################################################################################
-        
+
+# Commented for older version of TRIQS 1.2-dev
+#from pytriqs.cmake_info import hdf5_command_path
+import pytriqs.utility.mpi as mpi
+
 class ConverterTools:
 
     def read_fortran_file(self,filename,to_replace):
@@ -32,7 +36,7 @@ class ConverterTools:
             for x in line.split(): yield string.atof(x)
 
 
-    def _repack(self):
+    def repack(self):
         """Calls the h5repack routine, in order to reduce the file size of the hdf5 archive.
            Should only be used BEFORE the first invokation of HDFArchive in the program, otherwise
            the hdf5 linking is broken!!!"""
@@ -42,8 +46,11 @@ class ConverterTools:
         if not (mpi.is_master_node()): return
         mpi.report("Repacking the file %s"%self.hdf_file)
 
-        retcode = subprocess.call(["h5repack","-i%s"%self.hdf_file, "-otemphgfrt.h5"])
-        if (retcode!=0):
+        # delete following line for newest version of TRIQS 1.2-dev
+        hdf5_command_path = "@TRIQS_HDF5_COMMAND_PATH@"
+        retcode = subprocess.call(["h5repack","-i%s"%self.hdf_file,"-otemphgfrt.h5"])
+        #retcode = subprocess.call([hdf5_command_path+"/h5repack","-i%s"%self.hdf_file,"-otemphgfrt.h5"])
+        if retcode != 0:
             mpi.report("h5repack failed!")
         else:
             subprocess.call(["mv","-f","temphgfrt.h5","%s"%self.hdf_file])

@@ -18,6 +18,7 @@ A (not so) quick tour
    analysis
    selfcons
    Ce-HI
+   fleur
 
 Projective Wannier functions: the dmftproj package
 --------------------------------------------------
